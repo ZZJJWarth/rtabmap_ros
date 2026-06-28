@@ -37,6 +37,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <image_transport/image_transport.hpp>
 #include <image_transport/subscriber_filter.hpp>
 
+#include <functional>
+#include <mutex>
+
 #ifdef PRE_ROS_IRON
 #include <cv_bridge/cv_bridge.h>
 #else
@@ -47,6 +50,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include <nav_msgs/msg/odometry.hpp>
 
@@ -58,6 +62,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap_msgs/msg/sensor_data.hpp>
 #include <rtabmap_sync/CommonDataSubscriberDefines.h>
 #include <rtabmap_sync/SyncDiagnostic.h>
+
+struct ShmImage;
 
 namespace rtabmap_sync {
 
@@ -143,6 +149,13 @@ private:
 			bool subscribeScan2d,
 			bool subscribeScan3d,
 			bool subscribeScanDesc,
+			bool subscribeOdomInfo);
+	void setupDepthZcCallbacks(
+			rclcpp::Node & node,
+			const rclcpp::SubscriptionOptions & options,
+			bool subscribeOdom,
+			bool subscribeScan2d,
+			bool subscribeScan3d,
 			bool subscribeOdomInfo);
 	void setupStereoCallbacks(
 			rclcpp::Node & node,
@@ -241,6 +254,18 @@ private:
 			const rclcpp::SubscriptionOptions & options,
 			bool subscribeUserData,
 			bool subscribeOdomInfo);
+	void rgbZcCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+	void releaseRgbZcImage(ShmImage * image);
+	cv_bridge::CvImageConstPtr takeRgbZcImage(
+			const rclcpp::Time & stamp,
+			std::function<void()> & release);
+	void depthZcCommonCallback(
+			const nav_msgs::msg::Odometry::ConstSharedPtr & odomMsg,
+			const sensor_msgs::msg::Image::ConstSharedPtr & depthMsg,
+			const sensor_msgs::msg::CameraInfo::ConstSharedPtr & cameraInfoMsg,
+			const sensor_msgs::msg::LaserScan & scanMsg,
+			const sensor_msgs::msg::PointCloud2 & scan3dMsg,
+			const rtabmap_msgs::msg::OdomInfo::ConstSharedPtr & odomInfoMsg);
 
 protected:
 	std::string subscribedTopicsMsg_;
@@ -260,6 +285,7 @@ private:
 	bool subscribedToRGB_;
 	bool subscribedToOdom_;
 	bool subscribedToRGBD_;
+	bool subscribedToRGBZc_;
 	bool subscribedToSensorData_;
 	bool subscribedToScan2d_;
 	bool subscribedToScan3d_;
@@ -271,6 +297,12 @@ private:
 	std::string name_;
 	std::string imageTransport_;
 	std::string depthTransport_;
+	std::string rgbZcTopic_;
+	std::string rgbZcShmName_;
+	int rgbZcShmSize_;
+	double rgbZcStampTolerance_;
+	size_t rgbZcSubscriberId_;
+	bool rgbZcShmInitialized_;
 
 	rclcpp::CallbackGroup::SharedPtr syncCallbackGroup_;
 
@@ -278,6 +310,10 @@ private:
 	image_transport::SubscriberFilter imageSub_;
 	image_transport::SubscriberFilter imageDepthSub_;
 	message_filters::Subscriber<sensor_msgs::msg::CameraInfo> cameraInfoSub_;
+	message_filters::Subscriber<sensor_msgs::msg::Image> zcDepthSub_;
+	rclcpp::Subscription<std_msgs::msg::String>::ConstSharedPtr rgbZcSub_;
+	ShmImage * latestRgbZcImage_;
+	std::mutex latestRgbZcMutex_;
 
 	//for rgbd callback
 	rclcpp::Subscription<rtabmap_msgs::msg::RGBDImage>::ConstSharedPtr rgbdSub_;
@@ -318,6 +354,12 @@ private:
 	DATA_SYNCS5(depthScan2dInfo, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::LaserScan, rtabmap_msgs::msg::OdomInfo)
 	DATA_SYNCS5(depthScan3dInfo, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::PointCloud2, rtabmap_msgs::msg::OdomInfo)
 	DATA_SYNCS5(depthScanDescInfo, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, rtabmap_msgs::msg::ScanDescriptor, rtabmap_msgs::msg::OdomInfo)
+	DATA_SYNCS2(depthZc, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo)
+	DATA_SYNCS3(depthZcScan2d, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::LaserScan)
+	DATA_SYNCS3(depthZcScan3d, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::PointCloud2)
+	DATA_SYNCS3(depthZcInfo, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, rtabmap_msgs::msg::OdomInfo)
+	DATA_SYNCS4(depthZcScan2dInfo, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::LaserScan, rtabmap_msgs::msg::OdomInfo)
+	DATA_SYNCS4(depthZcScan3dInfo, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::PointCloud2, rtabmap_msgs::msg::OdomInfo)
 
 	// RGB + Depth + Odom
 	DATA_SYNCS4(depthOdom, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo)
@@ -328,6 +370,12 @@ private:
 	DATA_SYNCS6(depthOdomScan2dInfo, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::LaserScan, rtabmap_msgs::msg::OdomInfo)
 	DATA_SYNCS6(depthOdomScan3dInfo, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::PointCloud2, rtabmap_msgs::msg::OdomInfo)
 	DATA_SYNCS6(depthOdomScanDescInfo, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, rtabmap_msgs::msg::ScanDescriptor, rtabmap_msgs::msg::OdomInfo)
+	DATA_SYNCS3(depthZcOdom, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo)
+	DATA_SYNCS4(depthZcOdomScan2d, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::LaserScan)
+	DATA_SYNCS4(depthZcOdomScan3d, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::PointCloud2)
+	DATA_SYNCS4(depthZcOdomInfo, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, rtabmap_msgs::msg::OdomInfo)
+	DATA_SYNCS5(depthZcOdomScan2dInfo, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::LaserScan, rtabmap_msgs::msg::OdomInfo)
+	DATA_SYNCS5(depthZcOdomScan3dInfo, nav_msgs::msg::Odometry, sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo, sensor_msgs::msg::PointCloud2, rtabmap_msgs::msg::OdomInfo)
 
 #ifdef RTABMAP_SYNC_USER_DATA
 	// RGB + Depth + User Data

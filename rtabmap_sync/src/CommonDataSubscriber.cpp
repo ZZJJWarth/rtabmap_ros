@@ -28,6 +28,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap_sync/CommonDataSubscriber.h>
 #include <rtabmap/utilite/ULogger.h>
 
+#include <zc_shm.hpp>
+
 namespace rtabmap_sync {
 
 CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
@@ -39,6 +41,7 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 		subscribedToRGB_(!gui),
 		subscribedToOdom_(true),
 		subscribedToRGBD_(false),
+		subscribedToRGBZc_(false),
 		subscribedToSensorData_(false),
 		subscribedToScan2d_(false),
 		subscribedToScan3d_(false),
@@ -49,6 +52,12 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 		rgbdCameras_(1),
 		imageTransport_("raw"),
 		depthTransport_("raw"),
+		rgbZcTopic_("/camera/rgb_zc"),
+		rgbZcShmName_("robonix_zc_rgb"),
+		rgbZcShmSize_(67108864),
+		rgbZcStampTolerance_(0.050),
+		rgbZcSubscriberId_(0),
+		rgbZcShmInitialized_(false),
 
 		// RGB + Depth
 		SYNC_INIT(depth),
@@ -59,6 +68,12 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 		SYNC_INIT(depthScan2dInfo),
 		SYNC_INIT(depthScan3dInfo),
 		SYNC_INIT(depthScanDescInfo),
+		SYNC_INIT(depthZc),
+		SYNC_INIT(depthZcScan2d),
+		SYNC_INIT(depthZcScan3d),
+		SYNC_INIT(depthZcInfo),
+		SYNC_INIT(depthZcScan2dInfo),
+		SYNC_INIT(depthZcScan3dInfo),
 
 		// RGB + Depth + Odom
 		SYNC_INIT(depthOdom),
@@ -69,6 +84,12 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 		SYNC_INIT(depthOdomScan2dInfo),
 		SYNC_INIT(depthOdomScan3dInfo),
 		SYNC_INIT(depthOdomScanDescInfo),
+		SYNC_INIT(depthZcOdom),
+		SYNC_INIT(depthZcOdomScan2d),
+		SYNC_INIT(depthZcOdomScan3d),
+		SYNC_INIT(depthZcOdomInfo),
+		SYNC_INIT(depthZcOdomScan2dInfo),
+		SYNC_INIT(depthZcOdomScan3dInfo),
 
 #ifdef RTABMAP_SYNC_USER_DATA
 		// RGB + Depth + User Data
@@ -364,6 +385,7 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 
 {
 	name_ = node.get_name();
+	latestRgbZcImage_ = 0;
 
 	syncCallbackGroup_ = node.create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
@@ -376,6 +398,7 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 	subscribedToScanDescriptor_ = node.declare_parameter("subscribe_scan_descriptor", subscribedToScanDescriptor_);
 	subscribedToStereo_ = node.declare_parameter("subscribe_stereo", subscribedToStereo_);
 	subscribedToRGBD_ = node.declare_parameter("subscribe_rgbd", subscribedToRGBD_);
+	subscribedToRGBZc_ = node.declare_parameter("subscribe_rgb_zc", subscribedToRGBZc_);
 	subscribedToSensorData_ = node.declare_parameter("subscribe_sensor_data", subscribedToSensorData_);
 	subscribedToOdomInfo_ = node.declare_parameter("subscribe_odom_info", subscribedToOdomInfo_);
 	subscribedToUserData_ = node.declare_parameter("subscribe_user_data", subscribedToUserData_);
@@ -396,6 +419,10 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 	syncQueueSize_ = node.declare_parameter("sync_queue_size", syncQueueSize_);
 	imageTransport_ = node.declare_parameter("image_transport", imageTransport_);
 	depthTransport_ = node.declare_parameter("depth_transport", depthTransport_);
+	rgbZcTopic_ = node.declare_parameter("rgb_zc_topic", rgbZcTopic_);
+	rgbZcShmName_ = node.declare_parameter("rgb_zc_shm_name", rgbZcShmName_);
+	rgbZcShmSize_ = node.declare_parameter("rgb_zc_shm_size", rgbZcShmSize_);
+	rgbZcStampTolerance_ = node.declare_parameter("rgb_zc_stamp_tolerance", rgbZcStampTolerance_);
 
 	int qos = node.declare_parameter("qos", (int)RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT);
 	int qosOdom = node.declare_parameter("qos_odom", qos);
@@ -453,6 +480,21 @@ void CommonDataSubscriber::setupCallbacks(
 			RCLCPP_WARN(node.get_logger(), "rtabmap: Parameters subscribe_stereo and subscribe_rgbd cannot be true at the same time. Parameter subscribe_stereo is set to false.");
 			subscribedToStereo_ = false;
 		}
+	}
+	if(subscribedToRGBZc_ && !subscribedToDepth_)
+	{
+		RCLCPP_WARN(node.get_logger(), "rtabmap: Parameter subscribe_rgb_zc requires subscribe_depth=true. Parameter subscribe_rgb_zc is set to false.");
+		subscribedToRGBZc_ = false;
+	}
+	if(subscribedToRGBZc_ && subscribedToUserData_)
+	{
+		RCLCPP_WARN(node.get_logger(), "rtabmap: Parameter subscribe_rgb_zc does not support subscribe_user_data yet. Parameter subscribe_user_data is set to false.");
+		subscribedToUserData_ = false;
+	}
+	if(subscribedToRGBZc_ && subscribedToScanDescriptor_)
+	{
+		RCLCPP_WARN(node.get_logger(), "rtabmap: Parameter subscribe_rgb_zc does not support subscribe_scan_descriptor yet. Parameter subscribe_scan_descriptor is set to false.");
+		subscribedToScanDescriptor_ = false;
 	}
 	if(subscribedToSensorData_)
 	{
@@ -528,6 +570,7 @@ void CommonDataSubscriber::setupCallbacks(
 
 	RCLCPP_INFO(node.get_logger(), "%s: subscribe_depth = %s", name_.c_str(), subscribedToDepth_?"true":"false");
 	RCLCPP_INFO(node.get_logger(), "%s: subscribe_rgb = %s", name_.c_str(), subscribedToRGB_?"true":"false");
+	RCLCPP_INFO(node.get_logger(), "%s: subscribe_rgb_zc = %s", name_.c_str(), subscribedToRGBZc_?"true":"false");
 	RCLCPP_INFO(node.get_logger(), "%s: subscribe_stereo = %s", name_.c_str(), subscribedToStereo_?"true":"false");
 	RCLCPP_INFO(node.get_logger(), "%s: subscribe_rgbd = %s (rgbd_cameras=%d)", name_.c_str(), subscribedToRGBD_?"true":"false", rgbdCameras_);
 	RCLCPP_INFO(node.get_logger(), "%s: subscribe_sensor_data = %s", name_.c_str(), subscribedToSensorData_?"true":"false");
@@ -553,21 +596,40 @@ void CommonDataSubscriber::setupCallbacks(
 	RCLCPP_INFO(node.get_logger(), "%s: approx_sync     = %s", name_.c_str(), approxSync_?"true":"false");
 	RCLCPP_INFO(node.get_logger(), "%s: image_transport = %s", name_.c_str(), imageTransport_.c_str());
 	RCLCPP_INFO(node.get_logger(), "%s: depth_transport = %s", name_.c_str(), depthTransport_.c_str());
+	if(subscribedToRGBZc_)
+	{
+		RCLCPP_INFO(node.get_logger(), "%s: rgb_zc_topic = %s", name_.c_str(), rgbZcTopic_.c_str());
+		RCLCPP_INFO(node.get_logger(), "%s: rgb_zc_shm_name = %s", name_.c_str(), rgbZcShmName_.c_str());
+		RCLCPP_INFO(node.get_logger(), "%s: rgb_zc_stamp_tolerance = %.3f", name_.c_str(), rgbZcStampTolerance_);
+	}
 
 	rclcpp::SubscriptionOptions callbackOptions;
 	callbackOptions.callback_group = syncCallbackGroup_;
 
 	if(subscribedToDepth_)
 	{
-		setupDepthCallbacks(
-				node,
-				callbackOptions,
-				subscribedToOdom_,
-				subscribedToUserData_,
-				subscribedToScan2d_,
-				subscribedToScan3d_,
-				subscribedToScanDescriptor_,
-				subscribedToOdomInfo_);
+		if(subscribedToRGBZc_)
+		{
+			setupDepthZcCallbacks(
+					node,
+					callbackOptions,
+					subscribedToOdom_,
+					subscribedToScan2d_,
+					subscribedToScan3d_,
+					subscribedToOdomInfo_);
+		}
+		else
+		{
+			setupDepthCallbacks(
+					node,
+					callbackOptions,
+					subscribedToOdom_,
+					subscribedToUserData_,
+					subscribedToScan2d_,
+					subscribedToScan3d_,
+					subscribedToScanDescriptor_,
+					subscribedToOdomInfo_);
+		}
 	}
 	else if(subscribedToStereo_)
 	{
@@ -754,6 +816,12 @@ CommonDataSubscriber::~CommonDataSubscriber()
 	SYNC_DEL(depthScan2dInfo);
 	SYNC_DEL(depthScan3dInfo);
 	SYNC_DEL(depthScanDescInfo);
+	SYNC_DEL(depthZc);
+	SYNC_DEL(depthZcScan2d);
+	SYNC_DEL(depthZcScan3d);
+	SYNC_DEL(depthZcInfo);
+	SYNC_DEL(depthZcScan2dInfo);
+	SYNC_DEL(depthZcScan3dInfo);
 
 	// RGB + Depth + Odom
 	SYNC_DEL(depthOdom);
@@ -764,6 +832,12 @@ CommonDataSubscriber::~CommonDataSubscriber()
 	SYNC_DEL(depthOdomScan2dInfo);
 	SYNC_DEL(depthOdomScan3dInfo);
 	SYNC_DEL(depthOdomScanDescInfo);
+	SYNC_DEL(depthZcOdom);
+	SYNC_DEL(depthZcOdomScan2d);
+	SYNC_DEL(depthZcOdomScan3d);
+	SYNC_DEL(depthZcOdomInfo);
+	SYNC_DEL(depthZcOdomScan2dInfo);
+	SYNC_DEL(depthZcOdomScan3dInfo);
 
 #ifdef RTABMAP_SYNC_USER_DATA
 	// RGB + Depth + User Data
@@ -1058,6 +1132,29 @@ CommonDataSubscriber::~CommonDataSubscriber()
 		delete rgbdSubs_[i];
 	}
 	rgbdSubs_.clear();
+	{
+		std::lock_guard<std::mutex> lock(latestRgbZcMutex_);
+		if(latestRgbZcImage_)
+		{
+			releaseRgbZcImage(latestRgbZcImage_);
+			latestRgbZcImage_ = 0;
+		}
+	}
+	if(rgbZcSubscriberId_ != 0 && rgbZcShmInitialized_)
+	{
+		std::string shmTopic = rgbZcTopic_;
+		if(!shmTopic.empty() && shmTopic[0] == '/')
+		{
+			shmTopic.erase(0, 1);
+		}
+		manager_->delete_subscriber(shmTopic.c_str(), rgbZcSubscriberId_, shm);
+		rgbZcSubscriberId_ = 0;
+	}
+	if(rgbZcShmInitialized_)
+	{
+		shm_shutdown(rgbZcShmName_.c_str());
+		rgbZcShmInitialized_ = false;
+	}
 }
 
 void CommonDataSubscriber::commonSingleCameraCallback(

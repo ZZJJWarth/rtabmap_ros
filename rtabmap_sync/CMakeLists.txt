@@ -16,6 +16,7 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
 endif()
 
 find_package(cv_bridge REQUIRED)
+find_package(cpp_pubsub REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -25,6 +26,7 @@ find_package(rtabmap_conversions REQUIRED)
 find_package(rtabmap_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_updater REQUIRED)
+find_library(ROBONIX_ZC_LIBRARY NAMES robonix_zc REQUIRED)
 
 option(RTABMAP_SYNC_MULTI_RGBD "Build with multi RGBD camera synchronization support"  OFF)
 option(RTABMAP_SYNC_USER_DATA "Build with input user data support"  OFF)
@@ -71,6 +73,7 @@ SET(PublicLibraries
 
 SET(AmentLibraries
    cv_bridge
+   cpp_pubsub
    image_transport
    message_filters
    nav_msgs
@@ -139,8 +142,9 @@ target_include_directories(rtabmap_sync
 
 if("$ENV{ROS_DISTRO}" STRLESS "lyrical")
   ament_target_dependencies(rtabmap_sync ${AmentLibraries})
+  target_link_libraries(rtabmap_sync ${ROBONIX_ZC_LIBRARY})
 ELSE()
-  target_link_libraries(rtabmap_sync PRIVATE ${Libraries} PUBLIC ${PublicLibraries})
+  target_link_libraries(rtabmap_sync PRIVATE ${Libraries} ${ROBONIX_ZC_LIBRARY} PUBLIC ${PublicLibraries})
   target_link_libraries(rtabmap_sync_plugins PUBLIC ${Libraries})
 ENDIF()
 target_link_libraries(rtabmap_sync_plugins PUBLIC rtabmap_sync)
