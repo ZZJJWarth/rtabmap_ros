@@ -255,10 +255,20 @@ private:
 			bool subscribeUserData,
 			bool subscribeOdomInfo);
 	void rgbZcCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+	void depthZcStringCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+	void scan3dZcStringCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+	void cameraInfoZcCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg);
+	void odomZcCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg);
 	void releaseRgbZcImage(ShmImage * image);
+	void releaseZcImage(ShmImage * image, size_t subscriberId);
+	void releaseZcPointCloud2(ShmPointCloud2 * cloud, size_t subscriberId);
+	void tryDispatchRgbdZcFrame();
 	cv_bridge::CvImageConstPtr takeRgbZcImage(
 			const rclcpp::Time & stamp,
 			std::function<void()> & release);
+	cv_bridge::CvImageConstPtr makeCvImageFromZc(
+			ShmImage * image,
+			size_t subscriberId);
 	void depthZcCommonCallback(
 			const nav_msgs::msg::Odometry::ConstSharedPtr & odomMsg,
 			const sensor_msgs::msg::Image::ConstSharedPtr & depthMsg,
@@ -283,6 +293,7 @@ private:
 	bool subscribedToDepth_;
 	bool subscribedToStereo_;
 	bool subscribedToRGB_;
+	bool subscribedToDepthZc_;
 	bool subscribedToOdom_;
 	bool subscribedToRGBD_;
 	bool subscribedToRGBZc_;
@@ -292,16 +303,21 @@ private:
 	bool subscribedToScanDescriptor_;
 	bool subscribedToOdomInfo_;
 	bool subscribedToUserData_;
+	bool subscribedToScan3dZc_;
 	std::string odomFrameId_;
 	int rgbdCameras_;
 	std::string name_;
 	std::string imageTransport_;
 	std::string depthTransport_;
 	std::string rgbZcTopic_;
+	std::string depthZcTopic_;
+	std::string scan3dZcTopic_;
 	std::string rgbZcShmName_;
 	int rgbZcShmSize_;
 	double rgbZcStampTolerance_;
 	size_t rgbZcSubscriberId_;
+	size_t depthZcSubscriberId_;
+	size_t scan3dZcSubscriberId_;
 	bool rgbZcShmInitialized_;
 
 	rclcpp::CallbackGroup::SharedPtr syncCallbackGroup_;
@@ -312,7 +328,15 @@ private:
 	message_filters::Subscriber<sensor_msgs::msg::CameraInfo> cameraInfoSub_;
 	message_filters::Subscriber<sensor_msgs::msg::Image> zcDepthSub_;
 	rclcpp::Subscription<std_msgs::msg::String>::ConstSharedPtr rgbZcSub_;
+	rclcpp::Subscription<std_msgs::msg::String>::ConstSharedPtr depthZcStringSub_;
+	rclcpp::Subscription<std_msgs::msg::String>::ConstSharedPtr scan3dZcStringSub_;
+	rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::ConstSharedPtr cameraInfoZcSub_;
+	rclcpp::Subscription<nav_msgs::msg::Odometry>::ConstSharedPtr odomZcSub_;
 	ShmImage * latestRgbZcImage_;
+	ShmImage * latestDepthZcImage_;
+	ShmPointCloud2 * latestScan3dZcCloud_;
+	sensor_msgs::msg::CameraInfo::ConstSharedPtr latestZcCameraInfo_;
+	nav_msgs::msg::Odometry::ConstSharedPtr latestZcOdom_;
 	std::mutex latestRgbZcMutex_;
 
 	//for rgbd callback
