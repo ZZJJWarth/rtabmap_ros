@@ -64,6 +64,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap_sync/SyncDiagnostic.h>
 
 struct ShmImage;
+struct ShmPointCloud2;
 
 namespace rtabmap_sync {
 
