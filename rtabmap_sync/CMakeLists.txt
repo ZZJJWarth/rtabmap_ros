@@ -1,11 +1,18 @@
 cmake_minimum_required(VERSION 3.5)
 project(rtabmap_sync)
 
-# cpp_pubsub's public zero-copy headers use C++17 features.
-if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 17)
+set(ROBONIX_ENABLE_ZC OFF)
+if(DEFINED ENV{ROBONIX_ENABLE_ZC} AND "$ENV{ROBONIX_ENABLE_ZC}" STREQUAL "1")
+  set(ROBONIX_ENABLE_ZC ON)
 endif()
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+message(STATUS "ROBONIX_ENABLE_ZC = ${ROBONIX_ENABLE_ZC}")
+
+if(ROBONIX_ENABLE_ZC)
+  if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 17)
+  endif()
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
 
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
   # issues #1285 #1288
@@ -22,7 +29,9 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
 endif()
 
 find_package(cv_bridge REQUIRED)
-find_package(cpp_pubsub REQUIRED)
+if(ROBONIX_ENABLE_ZC)
+  find_package(cpp_pubsub REQUIRED)
+endif()
 find_package(image_transport REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -32,7 +41,9 @@ find_package(rtabmap_conversions REQUIRED)
 find_package(rtabmap_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_updater REQUIRED)
-find_library(ROBONIX_ZC_LIBRARY NAMES robonix_zc REQUIRED)
+if(ROBONIX_ENABLE_ZC)
+  find_library(ROBONIX_ZC_LIBRARY NAMES robonix_zc REQUIRED)
+endif()
 
 option(RTABMAP_SYNC_MULTI_RGBD "Build with multi RGBD camera synchronization support"  OFF)
 option(RTABMAP_SYNC_USER_DATA "Build with input user data support"  OFF)
@@ -79,7 +90,6 @@ SET(PublicLibraries
 
 SET(AmentLibraries
    cv_bridge
-   cpp_pubsub
    image_transport
    message_filters
    nav_msgs
@@ -90,6 +100,9 @@ SET(AmentLibraries
    sensor_msgs
    diagnostic_updater
 )
+IF(ROBONIX_ENABLE_ZC)
+  LIST(APPEND AmentLibraries cpp_pubsub)
+ENDIF()
 
 IF("$ENV{ROS_DISTRO}" STRLESS "lyrical")
   add_definitions(-DPRE_ROS_LYRICAL)
@@ -135,7 +148,10 @@ SET(rtabmap_sync_plugins_lib_src
 add_library(rtabmap_sync SHARED
    ${rtabmap_sync_lib_src}
 )
-target_compile_features(rtabmap_sync PUBLIC cxx_std_17)
+if(ROBONIX_ENABLE_ZC)
+  target_compile_features(rtabmap_sync PUBLIC cxx_std_17)
+  target_compile_definitions(rtabmap_sync PRIVATE ROBONIX_ENABLE_ZC)
+endif()
 add_library(rtabmap_sync_plugins SHARED
    ${rtabmap_sync_plugins_lib_src}
 )
@@ -149,10 +165,15 @@ target_include_directories(rtabmap_sync
 
 if("$ENV{ROS_DISTRO}" STRLESS "lyrical")
   ament_target_dependencies(rtabmap_sync ${AmentLibraries})
-  target_link_libraries(rtabmap_sync ${ROBONIX_ZC_LIBRARY})
+  if(ROBONIX_ENABLE_ZC)
+    target_link_libraries(rtabmap_sync ${ROBONIX_ZC_LIBRARY})
+  endif()
 ELSE()
-  target_link_libraries(rtabmap_sync PRIVATE ${Libraries} ${ROBONIX_ZC_LIBRARY} PUBLIC ${PublicLibraries})
-  ament_target_dependencies(rtabmap_sync cpp_pubsub)
+  target_link_libraries(rtabmap_sync PRIVATE ${Libraries} PUBLIC ${PublicLibraries})
+  if(ROBONIX_ENABLE_ZC)
+    target_link_libraries(rtabmap_sync PRIVATE ${ROBONIX_ZC_LIBRARY})
+    ament_target_dependencies(rtabmap_sync cpp_pubsub)
+  endif()
   target_link_libraries(rtabmap_sync_plugins PUBLIC ${Libraries})
 ENDIF()
 target_link_libraries(rtabmap_sync_plugins PUBLIC rtabmap_sync)

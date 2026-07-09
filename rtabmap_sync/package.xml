@@ -15,7 +15,7 @@
   <build_depend>ros_environment</build_depend>
 
   <depend>cv_bridge</depend>
-  <depend>cpp_pubsub</depend>
+  <depend condition="$ROBONIX_ENABLE_ZC == 1">cpp_pubsub</depend>
   <depend>image_transport</depend>
   <depend>message_filters</depend>
   <depend>nav_msgs</depend>

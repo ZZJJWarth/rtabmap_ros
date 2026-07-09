@@ -33,10 +33,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <cstring>
 #include <opencv2/core.hpp>
 #include <std_msgs/msg/string.hpp>
+#ifdef ROBONIX_ENABLE_ZC
 #include <zc_shm.hpp>
+#endif
 
 namespace rtabmap_sync {
 
+#ifdef ROBONIX_ENABLE_ZC
 namespace {
 
 std::string normalizeZcTopic(std::string topic)
@@ -525,6 +528,7 @@ void CommonDataSubscriber::depthZcOdomScan3dInfoCallback(
 	sensor_msgs::msg::LaserScan scan2dMsg;
 	depthZcCommonCallback(odomMsg, depthMsg, cameraInfoMsg, scan2dMsg, *scanMsg, odomInfoMsg);
 }
+#endif
 
 // RGB + Depth
 void CommonDataSubscriber::depthCallback(
@@ -992,6 +996,7 @@ void CommonDataSubscriber::setupDepthZcCallbacks(
 		bool subscribeScan3d,
 		bool subscribeOdomInfo)
 {
+#ifdef ROBONIX_ENABLE_ZC
 	RCLCPP_INFO(node.get_logger(), "Setup depth callback with Robonix RGB zero-copy input");
 
 	if(!rgbZcShmInitialized_)
@@ -1155,6 +1160,14 @@ void CommonDataSubscriber::setupDepthZcCallbacks(
 			rgbZcTopic_.c_str(),
 			rgbZcShmName_.c_str(),
 			rgbZcSubscriberId_);
+#else
+	RCLCPP_WARN(node.get_logger(), "Robonix zero-copy callbacks requested, but rtabmap_sync was built without ROBONIX_ENABLE_ZC=1.");
+	(void)options;
+	(void)subscribeOdom;
+	(void)subscribeScan2d;
+	(void)subscribeScan3d;
+	(void)subscribeOdomInfo;
+#endif
 }
 
 void CommonDataSubscriber::setupDepthCallbacks(

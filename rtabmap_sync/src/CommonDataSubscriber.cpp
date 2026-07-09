@@ -28,9 +28,29 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap_sync/CommonDataSubscriber.h>
 #include <rtabmap/utilite/ULogger.h>
 
+#include <cstdlib>
+
+#ifdef ROBONIX_ENABLE_ZC
 #include <zc_shm.hpp>
+#endif
 
 namespace rtabmap_sync {
+
+namespace {
+
+bool robonixZcRuntimeEnabled()
+{
+	const char * value = std::getenv("ROBONIX_ENABLE_ZC");
+	if(value == 0 || *value == '\0')
+	{
+		return false;
+	}
+	std::string flag(value);
+	return flag == "1" || flag == "on" || flag == "ON" || flag == "true" ||
+		flag == "TRUE" || flag == "yes" || flag == "YES";
+}
+
+}
 
 CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 		topicQueueSize_(10),
@@ -462,6 +482,24 @@ void CommonDataSubscriber::setupCallbacks(
 		subscribedToUserData_ = false;
 	}
 #endif
+
+	if(subscribedToRGBZc_ || subscribedToDepthZc_ || subscribedToScan3dZc_)
+	{
+#ifdef ROBONIX_ENABLE_ZC
+		if(!robonixZcRuntimeEnabled())
+		{
+			RCLCPP_WARN(node.get_logger(), "rtabmap: Robonix zero-copy is disabled (ROBONIX_ENABLE_ZC is not set at runtime). ZC subscriptions are set to false.");
+			subscribedToRGBZc_ = false;
+			subscribedToDepthZc_ = false;
+			subscribedToScan3dZc_ = false;
+		}
+#else
+		RCLCPP_WARN(node.get_logger(), "rtabmap: Robonix zero-copy is disabled (rtabmap_sync was built without ROBONIX_ENABLE_ZC=1). ZC subscriptions are set to false.");
+		subscribedToRGBZc_ = false;
+		subscribedToDepthZc_ = false;
+		subscribedToScan3dZc_ = false;
+#endif
+	}
 
 	if(subscribedToDepth_ && subscribedToStereo_)
 	{
@@ -1158,6 +1196,7 @@ CommonDataSubscriber::~CommonDataSubscriber()
 		delete rgbdSubs_[i];
 	}
 	rgbdSubs_.clear();
+#ifdef ROBONIX_ENABLE_ZC
 	{
 		std::lock_guard<std::mutex> lock(latestRgbZcMutex_);
 		if(latestRgbZcImage_)
@@ -1211,6 +1250,7 @@ CommonDataSubscriber::~CommonDataSubscriber()
 		shm_shutdown(rgbZcShmName_.c_str());
 		rgbZcShmInitialized_ = false;
 	}
+#endif
 }
 
 void CommonDataSubscriber::commonSingleCameraCallback(
