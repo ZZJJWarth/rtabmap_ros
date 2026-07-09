@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.5)
 project(rtabmap_sync)
 
+# cpp_pubsub's public zero-copy headers use C++17 features.
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
   # issues #1285 #1288
   find_library(
@@ -129,6 +135,7 @@ SET(rtabmap_sync_plugins_lib_src
 add_library(rtabmap_sync SHARED
    ${rtabmap_sync_lib_src}
 )
+target_compile_features(rtabmap_sync PUBLIC cxx_std_17)
 add_library(rtabmap_sync_plugins SHARED
    ${rtabmap_sync_plugins_lib_src}
 )
@@ -145,6 +152,7 @@ if("$ENV{ROS_DISTRO}" STRLESS "lyrical")
   target_link_libraries(rtabmap_sync ${ROBONIX_ZC_LIBRARY})
 ELSE()
   target_link_libraries(rtabmap_sync PRIVATE ${Libraries} ${ROBONIX_ZC_LIBRARY} PUBLIC ${PublicLibraries})
+  ament_target_dependencies(rtabmap_sync cpp_pubsub)
   target_link_libraries(rtabmap_sync_plugins PUBLIC ${Libraries})
 ENDIF()
 target_link_libraries(rtabmap_sync_plugins PUBLIC rtabmap_sync)

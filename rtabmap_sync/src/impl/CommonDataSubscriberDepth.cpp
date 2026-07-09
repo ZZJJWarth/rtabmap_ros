@@ -48,6 +48,36 @@ std::string normalizeZcTopic(std::string topic)
 	return topic;
 }
 
+void eraseFromProcessingQueue(size_t subscriberId, size_t messageId)
+{
+	if(subscriberId == 0 || shm == 0)
+	{
+		return;
+	}
+
+	std::string procName = "ShmBlockingProcessing_" + std::to_string(subscriberId);
+	ShmBlockingProcessing * proc = shm->find<ShmBlockingProcessing>(procName.c_str()).first;
+	if(proc == 0)
+	{
+		return;
+	}
+
+	scoped_lock<interprocess_mutex> procLock(proc->mutex);
+	auto iter = proc->myMessage.find(messageId);
+	if(iter == proc->myMessage.end())
+	{
+		return;
+	}
+	if(iter->second <= 1)
+	{
+		proc->myMessage.erase(iter);
+	}
+	else
+	{
+		--iter->second;
+	}
+}
+
 void copyPointCloud2FromZc(const ShmPointCloud2 & src, sensor_msgs::msg::PointCloud2 & dst)
 {
 	dst.header.stamp.sec = src.header.stamp.sec;
@@ -169,13 +199,7 @@ void CommonDataSubscriber::releaseZcImage(ShmImage * image, size_t subscriberId)
 		return;
 	}
 
-	std::string procName = "ShmBlockingProcessing_" + std::to_string(subscriberId);
-	ShmBlockingProcessing * proc = shm->find<ShmBlockingProcessing>(procName.c_str()).first;
-	if(proc != 0)
-	{
-		scoped_lock<interprocess_mutex> procLock(proc->mutex);
-		proc->myMessage.erase(image->myId);
-	}
+	eraseFromProcessingQueue(subscriberId, image->myId);
 	manager_->releaseMessage(image, shm);
 }
 
@@ -186,13 +210,7 @@ void CommonDataSubscriber::releaseZcPointCloud2(ShmPointCloud2 * cloud, size_t s
 		return;
 	}
 
-	std::string procName = "ShmBlockingProcessing_" + std::to_string(subscriberId);
-	ShmBlockingProcessing * proc = shm->find<ShmBlockingProcessing>(procName.c_str()).first;
-	if(proc != 0)
-	{
-		scoped_lock<interprocess_mutex> procLock(proc->mutex);
-		proc->myMessage.erase(cloud->myId);
-	}
+	eraseFromProcessingQueue(subscriberId, cloud->myId);
 	manager_->releaseMessage(cloud, shm);
 }
 
