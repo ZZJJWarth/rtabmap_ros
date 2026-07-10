@@ -320,6 +320,18 @@ private:
 	size_t depthZcSubscriberId_;
 	size_t scan3dZcSubscriberId_;
 	bool rgbZcShmInitialized_;
+	// scan3d (lidar) ZC may live in its own shared-memory segment, separate
+	// from the RGB/depth one (e.g. mid360 publishes into "robonix_zc_lidar3d"
+	// while the camera uses "robonix_zc_camera"). When scan3dZcShmName_ is
+	// empty or equals rgbZcShmName_, the RGB segment is reused (the legacy
+	// single-segment behaviour). scan3dZcShm_ is an opaque pointer to a
+	// boost::interprocess::managed_shared_memory; it is only touched under
+	// ROBONIX_ENABLE_ZC in the .cpp, where the type is complete.
+	std::string scan3dZcShmName_;
+	int scan3dZcShmSize_;
+	void * scan3dZcShm_;
+	bool scan3dZcShmInitialized_;
+	bool scan3dZcShmOwned_;
 
 	rclcpp::CallbackGroup::SharedPtr syncCallbackGroup_;
 

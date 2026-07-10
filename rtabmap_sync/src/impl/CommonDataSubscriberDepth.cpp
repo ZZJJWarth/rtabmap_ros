@@ -51,15 +51,16 @@ std::string normalizeZcTopic(std::string topic)
 	return topic;
 }
 
-void eraseFromProcessingQueue(size_t subscriberId, size_t messageId)
+void eraseFromProcessingQueue(size_t subscriberId, size_t messageId,
+		managed_shared_memory * segment)
 {
-	if(subscriberId == 0 || shm == 0)
+	if(subscriberId == 0 || segment == 0)
 	{
 		return;
 	}
 
 	std::string procName = "ShmBlockingProcessing_" + std::to_string(subscriberId);
-	ShmBlockingProcessing * proc = shm->find<ShmBlockingProcessing>(procName.c_str()).first;
+	ShmBlockingProcessing * proc = segment->find<ShmBlockingProcessing>(procName.c_str()).first;
 	if(proc == 0)
 	{
 		return;
@@ -155,7 +156,8 @@ void CommonDataSubscriber::depthZcStringCallback(const std_msgs::msg::String::Co
 
 void CommonDataSubscriber::scan3dZcStringCallback(const std_msgs::msg::String::ConstSharedPtr msg)
 {
-	ShmPointCloud2 * cloud = shm?shm->find<ShmPointCloud2>(msg->data.c_str()).first:0;
+	managed_shared_memory * segment = static_cast<managed_shared_memory*>(scan3dZcShm_);
+	ShmPointCloud2 * cloud = segment?segment->find<ShmPointCloud2>(msg->data.c_str()).first:0;
 	if(cloud == 0)
 	{
 		return;
@@ -202,19 +204,22 @@ void CommonDataSubscriber::releaseZcImage(ShmImage * image, size_t subscriberId)
 		return;
 	}
 
-	eraseFromProcessingQueue(subscriberId, image->myId);
+	eraseFromProcessingQueue(subscriberId, image->myId, shm);
 	manager_->releaseMessage(image, shm);
 }
 
 void CommonDataSubscriber::releaseZcPointCloud2(ShmPointCloud2 * cloud, size_t subscriberId)
 {
-	if(cloud == 0 || manager_ == 0 || shm == 0 || subscriberId == 0)
+	// The scan3d (lidar) cloud lives in its own segment when scan3dZcShm_
+	// is distinct from the RGB segment; otherwise it aliases the RGB one.
+	managed_shared_memory * segment = static_cast<managed_shared_memory*>(scan3dZcShm_);
+	if(cloud == 0 || manager_ == 0 || segment == 0 || subscriberId == 0)
 	{
 		return;
 	}
 
-	eraseFromProcessingQueue(subscriberId, cloud->myId);
-	manager_->releaseMessage(cloud, shm);
+	eraseFromProcessingQueue(subscriberId, cloud->myId, segment);
+	manager_->releaseMessage(cloud, segment);
 }
 
 cv_bridge::CvImageConstPtr CommonDataSubscriber::takeRgbZcImage(
@@ -1043,8 +1048,34 @@ void CommonDataSubscriber::setupDepthZcCallbacks(
 			}
 			if(subscribeScan3d && subscribedToScan3dZc_)
 			{
+				// The lidar point cloud may be published into a separate
+				// shared-memory segment from the camera (per-stream shm
+				// naming). When scan3dZcShmName_ is empty or matches the
+				// RGB segment, reuse the RGB segment (legacy behaviour);
+				// otherwise open_or_create a dedicated segment. The global
+				// ShmManager (constructed in the RGB segment by shm_init)
+				// is segment-agnostic: every manager_ call takes the
+				// segment explicitly, so a single manager_ serves both.
+				if(!scan3dZcShmInitialized_)
+				{
+					if(scan3dZcShmName_.empty() || scan3dZcShmName_ == rgbZcShmName_)
+					{
+						scan3dZcShm_ = shm;
+						scan3dZcShmOwned_ = false;
+					}
+					else
+					{
+						scan3dZcShm_ = new managed_shared_memory(
+								open_or_create,
+								scan3dZcShmName_.c_str(),
+								static_cast<size_t>(scan3dZcShmSize_));
+						scan3dZcShmOwned_ = true;
+					}
+					scan3dZcShmInitialized_ = true;
+				}
 				std::string scanShmTopic = normalizeZcTopic(scan3dZcTopic_);
-				scan3dZcSubscriberId_ = manager_->add_subscriber(scanShmTopic.c_str(), shm);
+				scan3dZcSubscriberId_ = manager_->add_subscriber(scanShmTopic.c_str(),
+						static_cast<managed_shared_memory*>(scan3dZcShm_));
 				scan3dZcStringSub_ = node.create_subscription<std_msgs::msg::String>(
 						scan3dZcTopic_,
 						rclcpp::QoS(topicQueueSize_).reliability(qosScan_),
@@ -1053,11 +1084,13 @@ void CommonDataSubscriber::setupDepthZcCallbacks(
 			}
 			RCLCPP_INFO(
 					node.get_logger(),
-					"ROBONIX_RTABMAP_RGBD_SCAN_ZC active: rgb='%s' depth='%s' scan3d='%s' shm='%s'",
+					"ROBONIX_RTABMAP_RGBD_SCAN_ZC active: rgb='%s' depth='%s' scan3d='%s' shm='%s' scan3d_shm='%s'",
 					rgbZcTopic_.c_str(),
 					depthZcTopic_.c_str(),
 					(subscribeScan3d && subscribedToScan3dZc_)?scan3dZcTopic_.c_str():"<disabled>",
-					rgbZcShmName_.c_str());
+					rgbZcShmName_.c_str(),
+					(subscribeScan3d && subscribedToScan3dZc_ && !scan3dZcShmName_.empty() && scan3dZcShmName_ != rgbZcShmName_)
+						?scan3dZcShmName_.c_str():rgbZcShmName_.c_str());
 			return;
 		}
 	}

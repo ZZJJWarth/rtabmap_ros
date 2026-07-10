@@ -84,6 +84,11 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 		depthZcSubscriberId_(0),
 		scan3dZcSubscriberId_(0),
 		rgbZcShmInitialized_(false),
+		scan3dZcShmName_(""),
+		scan3dZcShmSize_(0),
+		scan3dZcShm_(0),
+		scan3dZcShmInitialized_(false),
+		scan3dZcShmOwned_(false),
 
 		// RGB + Depth
 		SYNC_INIT(depth),
@@ -455,6 +460,12 @@ CommonDataSubscriber::CommonDataSubscriber(rclcpp::Node & node, bool gui) :
 	rgbZcShmName_ = node.declare_parameter("rgb_zc_shm_name", rgbZcShmName_);
 	rgbZcShmSize_ = node.declare_parameter("rgb_zc_shm_size", rgbZcShmSize_);
 	rgbZcStampTolerance_ = node.declare_parameter("rgb_zc_stamp_tolerance", rgbZcStampTolerance_);
+	// scan3d (lidar) ZC segment. Empty (the default) means reuse the RGB
+	// ZC segment — the legacy single-segment behaviour. Set to a distinct
+	// name (e.g. "robonix_zc_lidar3d") when the lidar producer publishes
+	// into its own segment, matching the per-stream shm naming convention.
+	scan3dZcShmName_ = node.declare_parameter("scan_cloud_zc_shm_name", scan3dZcShmName_);
+	scan3dZcShmSize_ = node.declare_parameter("scan_cloud_zc_shm_size", rgbZcShmSize_);
 
 	int qos = node.declare_parameter("qos", (int)RMW_QOS_POLICY_RELIABILITY_SYSTEM_DEFAULT);
 	int qosOdom = node.declare_parameter("qos_odom", qos);
@@ -665,6 +676,8 @@ void CommonDataSubscriber::setupCallbacks(
 		RCLCPP_INFO(node.get_logger(), "%s: scan_cloud_zc_topic = %s", name_.c_str(), scan3dZcTopic_.c_str());
 		RCLCPP_INFO(node.get_logger(), "%s: rgb_zc_shm_name = %s", name_.c_str(), rgbZcShmName_.c_str());
 		RCLCPP_INFO(node.get_logger(), "%s: rgb_zc_stamp_tolerance = %.3f", name_.c_str(), rgbZcStampTolerance_);
+		RCLCPP_INFO(node.get_logger(), "%s: scan_cloud_zc_shm_name = %s", name_.c_str(),
+			scan3dZcShmName_.empty() ? rgbZcShmName_.c_str() : scan3dZcShmName_.c_str());
 	}
 
 	rclcpp::SubscriptionOptions callbackOptions;
@@ -1235,15 +1248,31 @@ CommonDataSubscriber::~CommonDataSubscriber()
 		manager_->delete_subscriber(shmTopic.c_str(), depthZcSubscriberId_, shm);
 		depthZcSubscriberId_ = 0;
 	}
-	if(scan3dZcSubscriberId_ != 0 && rgbZcShmInitialized_)
+	if(scan3dZcSubscriberId_ != 0 && scan3dZcShmInitialized_)
 	{
 		std::string shmTopic = scan3dZcTopic_;
 		if(!shmTopic.empty() && shmTopic[0] == '/')
 		{
 			shmTopic.erase(0, 1);
 		}
-		manager_->delete_subscriber(shmTopic.c_str(), scan3dZcSubscriberId_, shm);
+		manager_->delete_subscriber(shmTopic.c_str(), scan3dZcSubscriberId_,
+			static_cast<managed_shared_memory*>(scan3dZcShm_));
 		scan3dZcSubscriberId_ = 0;
+	}
+	if(scan3dZcShmInitialized_)
+	{
+		// Only the locally-owned, separate scan3d segment needs releasing
+		// here; when it aliases the RGB segment (scan3dZcShmOwned_ == false)
+		// it is torn down by shm_shutdown(rgbZcShmName_) below. We do NOT
+		// remove the segment from the OS: the lidar producer may still be
+		// attached (there is no cross-process user count for it).
+		if(scan3dZcShmOwned_ && scan3dZcShm_ != 0)
+		{
+			delete static_cast<managed_shared_memory*>(scan3dZcShm_);
+			scan3dZcShm_ = 0;
+			scan3dZcShmOwned_ = false;
+		}
+		scan3dZcShmInitialized_ = false;
 	}
 	if(rgbZcShmInitialized_)
 	{
